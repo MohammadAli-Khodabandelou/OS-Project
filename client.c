@@ -1,93 +1,70 @@
-// C program for the Client Side
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
+#include <stdio.h> 
+#include <string.h> 
+#include <sys/socket.h> 
+#include <arpa/inet.h> 
+#include <unistd.h> 
+#include <pthread.h> 
 
-// inet_addr
-#include <arpa/inet.h>
-#include <unistd.h>
+#define PORT 8080
+#define SERVER_ADDRESS "127.0.0.1"
 
-// For threading, link with lpthread
-#include <pthread.h>
-#include <semaphore.h>
+void* send_data(void* data) 
+{ 
+    int* numbers = (int*)data; 
+    int socket_desc, c; 
+    struct sockaddr_in server; 
 
-// Function to send data to
-// server socket.
-void* clienthread(void* args)
-{
+    socket_desc = socket(AF_INET, SOCK_STREAM, 0); 
+    if (socket_desc == -1) 
+    { 
+        printf("Can not create socket.\n"); 
+        return 0; 
+    } 
 
-	int client_request = *((int*)args);
-	int network_socket;
+    server.sin_addr.s_addr = inet_addr(SERVER_ADDRESS); 
+    server.sin_family = AF_INET; 
+    server.sin_port = htons(PORT); 
 
-	// Create a stream socket
-	network_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (connect(socket_desc, (struct sockaddr *)&server, sizeof(server)) < 0) 
+    { 
+        printf("Connection failed.\n"); 
+        return 0; 
+    } 
 
-	// Initialise port number and address
-	struct sockaddr_in server_address;
-	server_address.sin_family = AF_INET;
-	server_address.sin_addr.s_addr = INADDR_ANY;
-	server_address.sin_port = htons(8989);
+    printf("Client Connected to server.\n"); 
 
-	// Initiate a socket connection
-	int connection_status = connect(network_socket,
-									(struct sockaddr*)&server_address,
-									sizeof(server_address));
+    int num1 = numbers[0]; 
+    int num2 = numbers[1]; 
 
-	// Check for connection error
-	if (connection_status < 0) {
-		puts("Error\n");
-		return 0;
-	}
+    send(socket_desc, &num1, sizeof(num1), 0); 
+    send(socket_desc, &num2, sizeof(num2), 0); 
 
-	printf("Connection established\n");
+    printf("Numbers sent successfully to server.\n"); 
 
-	// Send data to the socket
-	send(network_socket, &client_request, sizeof(client_request), 0);
+	// receive answer from server
+	int answer;
+	recv(socket_desc, &answer, sizeof(answer), 0);
+	printf("Answer of sum received from server\n");
+	printf("Answer is : %d\n", answer);
 
-	// Close the connection
-	close(network_socket);
-	pthread_exit(NULL);
+    return 0; 
+} 
 
-	return 0;
-}
+int main(int argc, char *argv[]) 
+{ 
+    int nums[2]; 
+    pthread_t thread; 
 
-// Driver Code
-int main()
-{
-	printf("1. Read\n");
-	printf("2. Write\n");
+    printf("Enter two numbers: "); 
+    scanf("%d %d", &nums[0], &nums[1]); 
 
-	// Input
-	int choice;
-	scanf("%d", &choice);
-	pthread_t tid;
+    if (pthread_create(&thread, NULL, send_data, (void*)nums) < 0) 
+    { 
+        printf("Can not create a new thread.\n"); 
+        return 1; 
+    } 
 
-	// Create connection
-	// depending on the input
-	switch (choice) {
-	case 1: {
-		int client_request = 1;
+    pthread_join(thread, NULL); 
 
-		// Create thread
-		pthread_create(&tid, NULL, clienthread, &client_request);
-		sleep(20);
-		break;
-	}
-	case 2: {
-		int client_request = 2;
-
-		// Create thread
-		pthread_create(&tid, NULL, clienthread, &client_request);
-		sleep(20);
-		break;
-	}
-	default:
-		printf("Invalid Input\n");
-		break;
-	}
-
-	// Suspend execution of
-	// calling thread
-	pthread_join(tid, NULL);
-}
+    return 0; 
+} 

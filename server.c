@@ -1,153 +1,150 @@
-// C program for the Server Side
-
-// inet_addr
-#include <arpa/inet.h>
-
-// For threading, link with lpthread
-#include <pthread.h>
-#include <semaphore.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
+#include <pthread.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
-// Semaphore variables
-sem_t x, y;
-pthread_t tid;
-pthread_t writerthreads[100];
-pthread_t readerthreads[100];
-int readercount = 0;
+#define PORT 8080
+#define MAX_CLIENTS 10
+#define THREAD_POOL_SIZE 4
 
-// Reader Function
-void* reader(void* param)
+struct client_request
 {
-	// Lock the semaphore
-	sem_wait(&x);
-	readercount++;
+    int client_socket;
+    struct sockaddr_in client_address;
+};
 
-	if (readercount == 1)
-		sem_wait(&y);
+// Function to be executed by each worker thread
+void *worker_thread(void *arg)
+{
+    int client_socket = *((int *)arg);
+    char buffer[1024];
+    int read_bytes = read(client_socket, buffer, sizeof(buffer));
+    buffer[read_bytes] = '\0';
+    printf("Received from client: %s\n", buffer);
 
-	// Unlock the semaphore
-	sem_post(&x);
+    const char *response = "Hello from server";
+    write(client_socket, response, strlen(response));
 
-	printf("\n%d reader is inside",
-		readercount);
-
-	sleep(5);
-
-	// Lock the semaphore
-	sem_wait(&x);
-	readercount--;
-
-	if (readercount == 0) {
-		sem_post(&y);
-	}
-
-	// Lock the semaphore
-	sem_post(&x);
-
-	printf("\n%d Reader is leaving",
-		readercount + 1);
-	pthread_exit(NULL);
+    close(client_socket);
+    pthread_exit(NULL);
 }
 
-// Writer Function
-void* writer(void* param)
+// Function to be executed by the master thread
+void *master_thread(void *arg)
 {
-	printf("\nWriter is trying to enter");
+    struct client_request *requests = (struct client_request *)arg;
+    int thread_count = 0;
+    pthread_t threads[THREAD_POOL_SIZE];
 
-	// Lock the semaphore
-	sem_wait(&y);
+    while (1)
+    {
+        // Wait for a client request to be added to the queue
+        while (requests[0].client_socket == 0)
+        {
+            sleep(1);
+        }
 
-	printf("\nWriter has entered");
+        // Create a worker thread for the client request
+        int client_socket = requests[0].client_socket;
+        if (pthread_create(&threads[thread_count], NULL, worker_thread, &client_socket) != 0)
+        {
+            perror("Error creating worker thread");
+        }
+        thread_count = (thread_count + 1) % THREAD_POOL_SIZE;
 
-	// Unlock the semaphore
-	sem_post(&y);
+        // Shift the queue to the left to remove the processed client request
+        int i;
+        for (i = 0; i < MAX_CLIENTS - 1; i++)
+        {
+            requests[i] = requests[i + 1];
+        }
+        memset(&requests[MAX_CLIENTS - 1], 0, sizeof(struct client_request));
+    }
 
-	printf("\nWriter is leaving");
-	pthread_exit(NULL);
+    pthread_exit(NULL);
 }
 
-// Driver Code
-int main()
-{
-	// Initialize variables
-	int serverSocket, newSocket;
-	struct sockaddr_in serverAddr;
-	struct sockaddr_storage serverStorage;
+void *master_thread(void *requests_ptr) {
+    struct client_request *requests = (struct client_request *) requests_ptr;
 
-	socklen_t addr_size;
-	sem_init(&x, 0, 1);
-	sem_init(&y, 0, 1);
+    pthread_t worker_thread_id[MAX_CLIENTS];
+    memset(worker_thread_id, 0, sizeof(worker_thread_id));
 
-	serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-	serverAddr.sin_addr.s_addr = INADDR_ANY;
-	serverAddr.sin_family = AF_INET;
-	serverAddr.sin_port = htons(8989);
+    int i;
+    for (i = 0; i < MAX_CLIENTS; i++) {
+        if (pthread_create(&worker_thread_id[i], NULL, worker_thread, requests) != 0) {
+            perror("Error creating worker thread");
+        }
+    }
 
-	// Bind the socket to the
-	// address and port number.
-	bind(serverSocket,
-		(struct sockaddr*)&serverAddr,
-		sizeof(serverAddr));
+    int next_request = 0;
+    while (1) {
+        if (requests[next_request].client_socket != 0) {
+            pthread_join(worker_thread_id[next_request % MAX_CLIENTS], NULL);
+            next_request = (next_request + 1) % MAX_CLIENTS;
+        }
+    }
 
-	// Listen on the socket,
-	// with 40 max connection
-	// requests queued
-	if (listen(serverSocket, 50) == 0)
-		printf("Listening\n");
-	else
-		printf("Error\n");
-
-
-	// Array for thread
-	pthread_t tid[60];
-
-	int i = 0;
-
-
-	while (1) {
-		addr_size = sizeof(serverStorage);
-
-		// Extract the first
-		// connection in the queue
-		newSocket = accept(serverSocket, (struct sockaddr*) &serverStorage, &addr_size);
-		int choice = 0;
-		recv(newSocket, &choice, sizeof(choice), 0);
-
-		if (choice == 1) {
-			// Creater readers thread
-			if (pthread_create(&readerthreads[i++], NULL, reader, &newSocket) != 0)
-				// Error in creating thread
-				printf("Failed to create thread\n");
-		}
-		else if (choice == 2) {
-			// Create writers thread
-			if (pthread_create(&writerthreads[i++], NULL, writer, &newSocket) != 0)
-				// Error in creating thread
-				printf("Failed to create thread\n");
-		}
-
-		if (i >= 50) {
-			// Update i
-			i = 0;
-
-			while (i < 50) {
-				// Suspend execution of
-				// the calling thread
-				// until the target
-				// thread terminates
-				pthread_join(writerthreads[i++], NULL);
-				pthread_join(readerthreads[i++], NULL);
-			}
-
-			// Update i
-			i = 0;
-		}
-	}
-
-	return 0;
+    return NULL;
 }
 
+int main(int argc, char const *argv[])
+{
+    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket < 0)
+    {
+        perror("Error creating socket");
+        return 1;
+    }
+
+    struct sockaddr_in server_address;
+    memset(&server_address, 0, sizeof(server_address));
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(PORT);
+    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
+    {
+        perror("Error binding socket");
+        return 1;
+    }
+    if (listen(server_socket, MAX_CLIENTS) < 0)
+    {
+        perror("Error listening on socket");
+        return 1;
+    }
+    struct client_request requests[MAX_CLIENTS];
+    memset(requests, 0, sizeof(requests));
+
+    pthread_t master_thread_id;
+    if (pthread_create(&master_thread_id, NULL, master_thread, requests) != 0)
+    {
+        perror("Error creating master thread");
+        return 1;
+    }
+
+    while (1)
+    {
+        struct sockaddr_in client_address;
+        socklen_t client_address_len = sizeof(client_address);
+        int client_socket = accept(server_socket, (struct sockaddr *)&client_address, &client_address_len);
+        if (client_socket < 0)
+        {
+            perror("Error accepting connection");
+            continue;
+        }
+
+        int i;
+        for (i = 0; i < MAX_CLIENTS; i++)
+        {
+            if (requests[i].client_socket == 0)
+            {
+                requests[i].client_socket = client_socket;
+                requests[i].client_address = client_address;
+                break;
+            }
+        }
+    }
+    return 0;
+}
