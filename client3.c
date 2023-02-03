@@ -4,7 +4,6 @@
 #include <arpa/inet.h> 
 #include <unistd.h> 
 #include <pthread.h> 
-#include <arpa/inet.h>
 
 #define PORT 8080
 #define SERVER_ADDRESS "127.0.0.1"
@@ -35,30 +34,15 @@ void* send_data(void* data)
     printf("Client Connected to server.\n"); 
 
     int num1 = numbers[0]; 
-    int num2 = numbers[1];
-    char buffer[sizeof(int) * 2];
-    num1 = htonl(num1);
-    num2 = htonl(num2);
-    memcpy(buffer, &num1, sizeof(int));
-    memcpy(buffer + sizeof(int), &num2, sizeof(int));
+    int num2 = numbers[1]; 
 
-
-    send(socket_desc, buffer, sizeof(buffer), 0); 
-
-    printf("Numbers sent to server.\n"); 
-
-    char message[100];
-    memset(message, 0, sizeof(message));
-    recv(socket_desc, message, sizeof(message), 0);
-
-    printf("Received message from server: %s\n", message);
+    printf("Numbers sent successfully to server.\n"); 
 
 	// receive answer from server
-
-	memset(message, 0, sizeof(message));
-    recv(socket_desc, message, sizeof(message), 0);
-
-    printf("Received message from server: %s\n", message);
+	int answer;
+	recv(socket_desc, &answer, sizeof(answer), 0);
+	printf("Answer of sum received from server\n");
+	printf("Answer is : %d\n", answer);
 
     return 0; 
 } 
@@ -68,7 +52,7 @@ int main(int argc, char *argv[])
     int nums[2]; 
     pthread_t thread; 
 
-    printf("Enter two numbers:\n"); 
+    printf("Enter two numbers: "); 
     scanf("%d %d", &nums[0], &nums[1]); 
 
     if (pthread_create(&thread, NULL, send_data, (void*)nums) < 0) 
