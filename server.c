@@ -9,21 +9,23 @@
 #include <sys/time.h>
 #include <arpa/inet.h>
 #include <time.h>
+#include <semaphore.h>
 
 #define PORT 8080
 #define THREAD_POOL_SIZE 2
 #define MAX_CLIENTS 50
 #define MEM_SIZE 10000
-#define LOG_FILE_PATH "server_log.txt"
+#define BASE_LOG_FILE_NAME "server_log"
 
 int timeout = 5; // timeout in seconds
 fd_set readset;
 struct timeval tv;
 
 int workers_data[THREAD_POOL_SIZE][5]; // 0: is_free, 1: client_socket, 2: first_num, 3: second_num, 4: execution_time
-float workers_time_data[MEM_SIZE][2];  // 0: arriving time, 1: waiting_time
+double workers_time_data[THREAD_POOL_SIZE][2];  // 0: arriving time, 1: waiting_time
 int data_array[MEM_SIZE][6];		   // 0: client_socket, 1: first_num, 2: second_num 3: execution time, 4: deadline, 5: priority
-float arriving_times[MEM_SIZE];
+double arriving_times[MEM_SIZE];
+sem_t semaphore[THREAD_POOL_SIZE];
 int main_index;
 int master_index;
 int strategy;
@@ -112,6 +114,7 @@ void *worker_thread(void *args)
 
 	while (1)
 	{
+		sem_wait(&semaphore[id]);
 		if (workers_data[id][0] == 0)
 		{
 			int num1 = workers_data[id][1];
@@ -129,20 +132,24 @@ void *worker_thread(void *args)
 
 			clock_t end = clock();
 			double total_time = (double)(end - start) / CLOCKS_PER_SEC;
-			double total_time_in_system = total_time - arrived_time;
+			double total_time_in_system = total_time - workers_time_data[id][0];
 
 			sprintf(message, "Done for client_socket %d : %d + %d = %d", client_socket, num1, num2, res);
 			printf("%s\n", message);
 
+			time_t now = time(NULL);
+			struct tm *timeinfo = localtime(&now);
+			char buffer[80];
+			char buffer2[100];
+			char file_name[150];
+
+			strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
+			strftime(buffer2, sizeof(buffer), "%Y-%m-%d-", timeinfo);
+    		sprintf(file_name, "%s_%s.txt", BASE_LOG_FILE_NAME, buffer2);
+
 			pthread_mutex_lock(&log_file_lock);
-			FILE *fp = open_file(LOG_FILE_PATH);
-			fprintf(fp, "---------------------------------------------\n
-							Request with client socket %d assigned to thread with id %d finished
-					: Arriving Time
-					: %f\r Waiting Time
-					: %f\r Total Time
-					: %f\n Task is %d + %d = %d\n---------------------------------------------\n ", 
-					client_socket, id + 1, workers_time_data[0], workers_time_data[1], total_time_in_system, num1, num2, res);
+			FILE *fp = open_file(file_name);
+			fprintf(fp, "Request with client socket %d assigned to thread with id %d finished:\n Current time of System: %s\n Arriving Time: %f\r Waiting Time in Queue: %f\r Total Time in System: %f\n Task Definition: %d + %d = %d\n---------------------------------------------\n", client_socket, id + 1, buffer, workers_time_data[id][0], workers_time_data[id][1], total_time_in_system, num1, num2, res);
 			fclose(fp);
 			pthread_mutex_unlock(&log_file_lock);
 
@@ -168,6 +175,12 @@ void *master_thread(void *arg)
 			printf("Error creating worker thread with id %d\n", i);
 			i--;
 		}
+
+		if (sem_init(&semaphore[i], 0, 0) != 0)
+        {
+            printf("\n semaphore init has failed for worker thread with id %d\n", i);
+            i--;
+        }
 	}
 
 	node *pq = NULL;
@@ -261,6 +274,7 @@ void *master_thread(void *arg)
 							workers_data[i][3] = client_socket;
 							workers_data[i][4] = execution_time;
 							workers_data[i][0] = 0;
+							sem_post(&semaphore[i]);
 							break;
 						}
 					}
@@ -277,10 +291,20 @@ void *master_thread(void *arg)
 					workers_data[i][3] = client_socket;
 					workers_data[i][4] = execution_time;
 					workers_data[i][0] = 0;
+					sem_post(&semaphore[i]);
 				}
 			}
 		}
 	}
+
+	for (int i = 0; i < THREAD_POOL_SIZE; i++)
+    {
+        int ret = pthread_detach(worker_thread_id[i]);
+		if (ret != 0)
+		{
+			printf("Failed to detach thread %d\n", i);
+		}
+    }
 
 	return NULL;
 }
@@ -395,6 +419,8 @@ int main(int argc, char const *argv[])
 			printf("Timeout happened for client %d:\n", client_socket);
 		}
 	}
+	
+	pthread_detach(master_thread_id);
 	pthread_mutex_destroy(&log_file_lock);
 	return 0;
 }
