@@ -14,17 +14,21 @@
 #define THREAD_POOL_SIZE 2
 #define MAX_CLIENTS 50
 #define MEM_SIZE 10000
+#define LOG_FILE_PATH "server_log.txt"
 
 int timeout = 5; // timeout in seconds
 fd_set readset;
 struct timeval tv;
 
 int workers_data[THREAD_POOL_SIZE][5]; // 0: is_free, 1: client_socket, 2: first_num, 3: second_num, 4: execution_time
+float workers_time_data[MEM_SIZE][2];  // 0: arriving time, 1: waiting_time
 int data_array[MEM_SIZE][6];		   // 0: client_socket, 1: first_num, 2: second_num 3: execution time, 4: deadline, 5: priority
+float arriving_times[MEM_SIZE];
 int main_index;
 int master_index;
 int strategy;
 clock_t start;
+pthread_mutex_t log_file_lock;
 
 typedef struct node
 {
@@ -34,10 +38,11 @@ typedef struct node
 	int execution_time;
 	int deadline;
 	int priority;
+	double arrived_time;
 	struct node *next;
 } node;
 
-node *new_node(int first_num, int second_num, int client_socket, int execution_time, int deadline, int priority)
+node *new_node(int first_num, int second_num, int client_socket, int execution_time, int deadline, int priority, double arrived_time)
 {
 	node *temp = (node *)malloc(sizeof(node));
 	temp->first_num = first_num;
@@ -46,11 +51,12 @@ node *new_node(int first_num, int second_num, int client_socket, int execution_t
 	temp->deadline = deadline;
 	temp->priority = priority;
 	temp->client_socket = client_socket;
+	temp->arrived_time = arrived_time;
 	temp->next = NULL;
 	return temp;
 }
 
-void dequeue(node **head, int *first_num, int *second_num, int *client_socket, int *execution_time, int *deadline)
+void dequeue(node **head, int *first_num, int *second_num, int *client_socket, int *execution_time, int *deadline, double *arrived_time)
 {
 	node *temp = *head;
 	*first_num = temp->first_num;
@@ -58,14 +64,15 @@ void dequeue(node **head, int *first_num, int *second_num, int *client_socket, i
 	*client_socket = temp->client_socket;
 	*execution_time = temp->execution_time;
 	*deadline = temp->deadline;
+	*arrived_time = temp->arrived_time;
 	(*head) = (*head)->next;
 	free(temp);
 }
 
-void enqueue(node **head, int first_num, int second_num, int client_socket, int execution_time, int deadline, int priority)
+void enqueue(node **head, int first_num, int second_num, int client_socket, int execution_time, int deadline, int priority, double arrived_time)
 {
 	node *start = (*head);
-	node *temp = new_node(first_num, second_num, client_socket, execution_time, deadline, priority);
+	node *temp = new_node(first_num, second_num, client_socket, execution_time, deadline, priority, arrived_time);
 	if ((*head)->priority > priority)
 	{
 		temp->next = *head;
@@ -87,6 +94,17 @@ int is_empty(node **head)
 	return (*head) == NULL;
 }
 
+FILE *open_file(char *address)
+{
+	FILE *file_p = fopen(address, "a");
+	if (file_p == NULL)
+	{
+		printf("error happened in opening file\n");
+		exit(1);
+	}
+	return file_p;
+}
+
 void *worker_thread(void *args)
 {
 	int id = *((int *)args);
@@ -99,9 +117,9 @@ void *worker_thread(void *args)
 			int num1 = workers_data[id][1];
 			int num2 = workers_data[id][2];
 			int client_socket = workers_data[id][3];
-			int execution_time =  workers_data[id][4];
+			int execution_time = workers_data[id][4];
 			int res = num1 + num2;
-			printf("Client with id %d is assigned to worker with id %d\n", client_socket, id);
+			printf("Client with id %d is assigned to worker with id %d\n", client_socket, id + 1);
 			sleep(execution_time);
 
 			char message[100];
@@ -109,8 +127,24 @@ void *worker_thread(void *args)
 
 			send(client_socket, message, strlen(message), 0);
 
+			clock_t end = clock();
+			double total_time = (double)(end - start) / CLOCKS_PER_SEC;
+			double total_time_in_system = total_time - arrived_time;
+
 			sprintf(message, "Done for client_socket %d : %d + %d = %d", client_socket, num1, num2, res);
 			printf("%s\n", message);
+
+			pthread_mutex_lock(&log_file_lock);
+			FILE *fp = open_file(LOG_FILE_PATH);
+			fprintf(fp, "---------------------------------------------\n
+							Request with client socket %d assigned to thread with id %d finished
+					: Arriving Time
+					: %f\r Waiting Time
+					: %f\r Total Time
+					: %f\n Task is %d + %d = %d\n---------------------------------------------\n ", 
+					client_socket, id + 1, workers_time_data[0], workers_time_data[1], total_time_in_system, num1, num2, res);
+			fclose(fp);
+			pthread_mutex_unlock(&log_file_lock);
 
 			workers_data[id][0] = 1;
 		}
@@ -149,6 +183,7 @@ void *master_thread(void *arg)
 				int execution_time = data_array[master_index % MEM_SIZE][3];
 				int deadline = data_array[master_index % MEM_SIZE][4];
 				int priority = data_array[master_index % MEM_SIZE][5];
+				double arrived_time = arriving_times[master_index % MEM_SIZE];
 				master_index++;
 
 				int final_priority;
@@ -172,11 +207,11 @@ void *master_thread(void *arg)
 
 				if (is_empty(&pq))
 				{
-					pq = new_node(num1, num2, client_socket, execution_time, deadline, final_priority);
+					pq = new_node(num1, num2, client_socket, execution_time, deadline, final_priority, arrived_time);
 				}
 				else
 				{
-					enqueue(&pq, num1, num2, client_socket, execution_time, deadline, final_priority);
+					enqueue(&pq, num1, num2, client_socket, execution_time, deadline, final_priority, arrived_time);
 				}
 			}
 			else
@@ -195,6 +230,7 @@ void *master_thread(void *arg)
 			if (workers_data[i][0] == 1) // means worker is free
 			{
 				int num1, num2, client_socket, execution_time, deadline;
+				double arrived_time;
 				if (is_empty(&pq))
 				{
 					continue;
@@ -207,7 +243,7 @@ void *master_thread(void *arg)
 						{
 							break;
 						}
-						dequeue(&pq, &num1, &num2, &client_socket, &execution_time, &deadline);
+						dequeue(&pq, &num1, &num2, &client_socket, &execution_time, &deadline, &arrived_time);
 						clock_t end = clock();
 						int elapsed_time = (int)((double)(end - start) / CLOCKS_PER_SEC);
 						if (deadline > elapsed_time + execution_time)
@@ -216,6 +252,10 @@ void *master_thread(void *arg)
 						}
 						else
 						{
+							clock_t end = clock();
+							double assigned_time = (double)(end - start) / CLOCKS_PER_SEC;
+							workers_time_data[i][0] = arrived_time;
+							workers_time_data[i][1] = assigned_time - arrived_time;
 							workers_data[i][1] = num1;
 							workers_data[i][2] = num2;
 							workers_data[i][3] = client_socket;
@@ -227,7 +267,11 @@ void *master_thread(void *arg)
 				}
 				else
 				{
-					dequeue(&pq, &num1, &num2, &client_socket, &execution_time, &deadline);
+					dequeue(&pq, &num1, &num2, &client_socket, &execution_time, &deadline, &arrived_time);
+					clock_t end = clock();
+					double assigned_time = (double)(end - start) / CLOCKS_PER_SEC;
+					workers_time_data[i][0] = arrived_time;
+					workers_time_data[i][1] = assigned_time - arrived_time;
 					workers_data[i][1] = num1;
 					workers_data[i][2] = num2;
 					workers_data[i][3] = client_socket;
@@ -245,6 +289,12 @@ int main(int argc, char const *argv[])
 {
 	printf("Select your scheduling algorithm:\n1- FCFS\n2- Priority\n3- SJF\n4- EDF\n");
 	scanf("%d", &strategy);
+
+	if (pthread_mutex_init(&log_file_lock, NULL) != 0)
+	{
+		printf("\n mutex init for file has failed\n");
+		return 1;
+	}
 
 	int server_socket = socket(AF_INET, SOCK_STREAM, 0);
 	if (server_socket < 0)
@@ -309,6 +359,9 @@ int main(int argc, char const *argv[])
 			char buffer[sizeof(int) * 5];
 			recv(client_socket, buffer, sizeof(buffer), 0);
 
+			clock_t request_received = clock();
+			double elapsed_time = (double)(request_received - start) / CLOCKS_PER_SEC;
+
 			int first_num, second_num, priority, deadline, execution_time;
 			memcpy(&first_num, buffer, sizeof(int));
 			memcpy(&second_num, buffer + sizeof(int), sizeof(int));
@@ -328,6 +381,7 @@ int main(int argc, char const *argv[])
 
 			send(client_socket, message, strlen(message), 0);
 
+			arriving_times[main_index % MEM_SIZE] = elapsed_time;
 			data_array[main_index % MEM_SIZE][0] = client_socket;
 			data_array[main_index % MEM_SIZE][1] = first_num;
 			data_array[main_index % MEM_SIZE][2] = second_num;
@@ -341,5 +395,6 @@ int main(int argc, char const *argv[])
 			printf("Timeout happened for client %d:\n", client_socket);
 		}
 	}
+	pthread_mutex_destroy(&log_file_lock);
 	return 0;
 }
