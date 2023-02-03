@@ -8,9 +8,10 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <arpa/inet.h>
+#include <time.h>
 
 #define PORT 8080
-#define THREAD_POOL_SIZE 4
+#define THREAD_POOL_SIZE 2
 #define MAX_CLIENTS 50
 #define MEM_SIZE 10000
 
@@ -18,45 +19,53 @@ int timeout = 5; // timeout in seconds
 fd_set readset;
 struct timeval tv;
 
-int workers_data[THREAD_POOL_SIZE][4]; // 0: is_free, 1: client_socket, 2: first_num, 3: second_num
-int data_array[MEM_SIZE][3];		   // 0: client_socket, 1: first_num, 2: second_num
+int workers_data[THREAD_POOL_SIZE][5]; // 0: is_free, 1: client_socket, 2: first_num, 3: second_num, 4: execution_time
+int data_array[MEM_SIZE][6];		   // 0: client_socket, 1: first_num, 2: second_num 3: execution time, 4: deadline, 5: priority
 int main_index;
 int master_index;
+int strategy;
+clock_t start;
 
 typedef struct node
 {
 	int first_num;
 	int second_num;
 	int client_socket;
+	int execution_time;
+	int deadline;
 	int priority;
 	struct node *next;
 } node;
 
-node *new_node(int first_num, int second_num, int client_socket, int priority)
+node *new_node(int first_num, int second_num, int client_socket, int execution_time, int deadline, int priority)
 {
 	node *temp = (node *)malloc(sizeof(node));
 	temp->first_num = first_num;
 	temp->second_num = second_num;
+	temp->execution_time = execution_time;
+	temp->deadline = deadline;
 	temp->priority = priority;
 	temp->client_socket = client_socket;
 	temp->next = NULL;
 	return temp;
 }
 
-void dequeue(node **head, int *first_num, int *second_num, int* client_socket)
+void dequeue(node **head, int *first_num, int *second_num, int *client_socket, int *execution_time, int *deadline)
 {
 	node *temp = *head;
 	*first_num = temp->first_num;
 	*second_num = temp->second_num;
 	*client_socket = temp->client_socket;
+	*execution_time = temp->execution_time;
+	*deadline = temp->deadline;
 	(*head) = (*head)->next;
 	free(temp);
 }
 
-void enqueue(node **head, int first_num, int second_num, int client_socket, int priority)
+void enqueue(node **head, int first_num, int second_num, int client_socket, int execution_time, int deadline, int priority)
 {
 	node *start = (*head);
-	node *temp = new_node(first_num, second_num, client_socket, priority);
+	node *temp = new_node(first_num, second_num, client_socket, execution_time, deadline, priority);
 	if ((*head)->priority > priority)
 	{
 		temp->next = *head;
@@ -83,27 +92,29 @@ void *worker_thread(void *args)
 	int id = *((int *)args);
 	workers_data[id][0] = 1;
 
-    while (1)
-    {
-        if (workers_data[id][0] == 0)
-        {
-            int num1 = workers_data[id][1];
-            int num2 = workers_data[id][2];
+	while (1)
+	{
+		if (workers_data[id][0] == 0)
+		{
+			int num1 = workers_data[id][1];
+			int num2 = workers_data[id][2];
 			int client_socket = workers_data[id][3];
-            int res = num1 + num2;
-            sleep(10); // for thest priority queue
+			int execution_time =  workers_data[id][4];
+			int res = num1 + num2;
+			printf("Client with id %d is assigned to worker with id %d\n", client_socket, id);
+			sleep(execution_time);
 
 			char message[100];
 			sprintf(message, "Done: %d + %d = %d\n", num1, num2, res);
 
 			send(client_socket, message, strlen(message), 0);
-			
+
 			sprintf(message, "Done for client_socket %d : %d + %d = %d", client_socket, num1, num2, res);
 			printf("%s\n", message);
 
-            workers_data[id][0] = 1;
-        }
-    }
+			workers_data[id][0] = 1;
+		}
+	}
 	return NULL;
 }
 
@@ -117,7 +128,7 @@ void *master_thread(void *arg)
 	for (i = 0; i < THREAD_POOL_SIZE; i++)
 	{
 		int *id = (int *)malloc(sizeof(int));
-        *id = i;
+		*id = i;
 		if (pthread_create(&worker_thread_id[i], NULL, worker_thread, id) != 0)
 		{
 			printf("Error creating worker thread with id %d\n", i);
@@ -129,43 +140,100 @@ void *master_thread(void *arg)
 	while (1)
 	{
 		for (int i = 0; i < THREAD_POOL_SIZE; i++)
-		{ 
+		{
 			if (main_index != master_index)
 			{
 				int client_socket = data_array[master_index % MEM_SIZE][0];
 				int num1 = data_array[master_index % MEM_SIZE][1];
 				int num2 = data_array[master_index % MEM_SIZE][2];
+				int execution_time = data_array[master_index % MEM_SIZE][3];
+				int deadline = data_array[master_index % MEM_SIZE][4];
+				int priority = data_array[master_index % MEM_SIZE][5];
 				master_index++;
+
+				int final_priority;
+				if (strategy == 1)
+				{
+					final_priority = fcfs_counter;
+					fcfs_counter++;
+				}
+				else if (strategy == 2)
+				{
+					final_priority = priority;
+				}
+				else if (strategy == 3)
+				{
+					final_priority = execution_time;
+				}
+				else if (strategy == 4)
+				{
+					final_priority = deadline;
+				}
+
 				if (is_empty(&pq))
 				{
-					pq = new_node(num1, num2, client_socket, fcfs_counter++);
+					pq = new_node(num1, num2, client_socket, execution_time, deadline, final_priority);
 				}
 				else
 				{
-					enqueue(&pq, num1, num2, client_socket, fcfs_counter++);
+					enqueue(&pq, num1, num2, client_socket, execution_time, deadline, final_priority);
 				}
-			} else{
+			}
+			else
+			{
 				break;
 			}
 		}
+
 		if (is_empty(&pq))
 		{
 			continue;
 		}
+
 		for (int i = 0; i < THREAD_POOL_SIZE; i++)
 		{
 			if (workers_data[i][0] == 1) // means worker is free
 			{
-				int num1, num2, client_socket;
+				int num1, num2, client_socket, execution_time, deadline;
 				if (is_empty(&pq))
 				{
 					continue;
 				}
-				dequeue(&pq, &num1, &num2, &client_socket);
-				workers_data[i][1] = num1;
-				workers_data[i][2] = num2;
-				workers_data[i][3] = client_socket;
-				workers_data[i][0] = 0;
+				if (strategy == 4) // strategy based on deadline (EDF)
+				{
+					while (1)
+					{
+						if (is_empty(&pq))
+						{
+							break;
+						}
+						dequeue(&pq, &num1, &num2, &client_socket, &execution_time, &deadline);
+						clock_t end = clock();
+						int elapsed_time = (int)((double)(end - start) / CLOCKS_PER_SEC);
+						if (deadline > elapsed_time + execution_time)
+						{
+							continue;
+						}
+						else
+						{
+							workers_data[i][1] = num1;
+							workers_data[i][2] = num2;
+							workers_data[i][3] = client_socket;
+							workers_data[i][4] = execution_time;
+							workers_data[i][0] = 0;
+							break;
+						}
+					}
+				}
+				else
+				{
+					dequeue(&pq, &num1, &num2, &client_socket, &execution_time, &deadline);
+					workers_data[i][1] = num1;
+					workers_data[i][2] = num2;
+					workers_data[i][3] = client_socket;
+					workers_data[i][4] = execution_time;
+					workers_data[i][0] = 0;
+				}
 			}
 		}
 	}
@@ -175,6 +243,9 @@ void *master_thread(void *arg)
 
 int main(int argc, char const *argv[])
 {
+	printf("Select your scheduling algorithm:\n1- FCFS\n2- Priority\n3- SJF\n4- EDF\n");
+	scanf("%d", &strategy);
+
 	int server_socket = socket(AF_INET, SOCK_STREAM, 0);
 	if (server_socket < 0)
 	{
@@ -209,6 +280,7 @@ int main(int argc, char const *argv[])
 	master_index = 0;
 
 	printf("Server Successfully binded to port %d and listen on it\n", PORT);
+	start = clock();
 
 	while (1)
 	{
@@ -234,25 +306,34 @@ int main(int argc, char const *argv[])
 		}
 		else if (retval)
 		{
-			char buffer[sizeof(int) * 2];
+			char buffer[sizeof(int) * 5];
 			recv(client_socket, buffer, sizeof(buffer), 0);
 
-			int first_num, second_num;
+			int first_num, second_num, priority, deadline, execution_time;
 			memcpy(&first_num, buffer, sizeof(int));
 			memcpy(&second_num, buffer + sizeof(int), sizeof(int));
+			memcpy(&execution_time, buffer + (sizeof(int) * 2), sizeof(int));
+			memcpy(&deadline, buffer + (sizeof(int) * 3), sizeof(int));
+			memcpy(&priority, buffer + (sizeof(int) * 4), sizeof(int));
 
 			first_num = ntohl(first_num);
 			second_num = ntohl(second_num);
-			printf("Received numbers from client %d:\n", client_socket);
+			execution_time = ntohl(execution_time);
+			deadline = ntohl(deadline);
+			priority = ntohl(priority);
+			printf("Received numbers from client %d.\n", client_socket);
 
 			char message[100];
-			sprintf(message, "Received numbers: %d and %d\n", first_num, second_num);
+			sprintf(message, "Numbers Received Successfully, your client id is %d\n", client_socket);
 
 			send(client_socket, message, strlen(message), 0);
 
 			data_array[main_index % MEM_SIZE][0] = client_socket;
 			data_array[main_index % MEM_SIZE][1] = first_num;
 			data_array[main_index % MEM_SIZE][2] = second_num;
+			data_array[main_index % MEM_SIZE][3] = execution_time;
+			data_array[main_index % MEM_SIZE][4] = deadline;
+			data_array[main_index % MEM_SIZE][5] = priority;
 			main_index++;
 		}
 		else

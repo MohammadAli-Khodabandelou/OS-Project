@@ -34,17 +34,15 @@ void* send_data(void* data)
 
     printf("Client Connected to server.\n"); 
 
-    int num1 = numbers[0]; 
-    int num2 = numbers[1];
-    char buffer[sizeof(int) * 2];
-    num1 = htonl(num1);
-    num2 = htonl(num2);
-    memcpy(buffer, &num1, sizeof(int));
-    memcpy(buffer + sizeof(int), &num2, sizeof(int));
 
-
+    char buffer[sizeof(int) * 5];
+    for (int i = 0; i < 5; i++)
+    {
+        int num = htonl(numbers[i]);
+        memcpy(buffer + (i * sizeof(int)), &num, sizeof(int));
+    }
+    
     send(socket_desc, buffer, sizeof(buffer), 0); 
-
     printf("Numbers sent to server.\n"); 
 
     char message[100];
@@ -53,7 +51,7 @@ void* send_data(void* data)
 
     printf("Received message from server: %s\n", message);
 
-	// receive answer from server
+	// received answer from server
 
 	memset(message, 0, sizeof(message));
     recv(socket_desc, message, sizeof(message), 0);
@@ -65,11 +63,20 @@ void* send_data(void* data)
 
 int main(int argc, char *argv[]) 
 { 
-    int nums[2]; 
+    int nums[5]; 
     pthread_t thread; 
 
     printf("Enter two numbers:\n"); 
     scanf("%d %d", &nums[0], &nums[1]); 
+
+    printf("Enter executation time:\n"); 
+    scanf("%d", &nums[2]);
+    
+    printf("Enter deadline of job:\n"); 
+    scanf("%d", &nums[3]); 
+
+    printf("Enter Priority (lower number means higher priority):\n"); 
+    scanf("%d", &nums[4]); 
 
     if (pthread_create(&thread, NULL, send_data, (void*)nums) < 0) 
     { 
