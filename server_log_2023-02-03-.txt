@@ -1,15 +1,0 @@
-Request with client socket 4 assigned to thread with id 1 finished:
- Current time of System: 2023-02-03 19:47:20
- Arriving Time: 8.411462 Waiting Time in Queue: 0.006574 Total Time in System: 23.000025
- Task Definition: 20 + 34 = 54
----------------------------------------------
-Request with client socket 4 assigned to thread with id 1 finished:
- Current time of System: 2023-02-03 19:49:53
- Arriving Time: 31.656519 Waiting Time in Queue: 5.483609 Total Time in System: 23.239971
- Task Definition: 23 + 5 = 28
----------------------------------------------
-Request with client socket 4 assigned to thread with id 1 finished:
- Current time of System: 2023-02-03 19:57:15
- Arriving Time: 10.073355 Waiting Time in Queue: 5.957744 Total Time in System: 22.061862
- Task Definition: 23 + 12 = 35
----------------------------------------------

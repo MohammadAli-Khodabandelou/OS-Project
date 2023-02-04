@@ -259,8 +259,34 @@ void *master_thread(void *arg)
 						dequeue(&pq, &num1, &num2, &client_socket, &execution_time, &deadline, &arrived_time);
 						clock_t end = clock();
 						int elapsed_time = (int)((double)(end - start) / CLOCKS_PER_SEC);
-						if (deadline > elapsed_time + execution_time)
+						if (deadline < elapsed_time + execution_time)
 						{
+							char message[100];
+							sprintf(message, "Failed to do: %d + %d\nDeadline is passed unfortunately", num1, num2);
+
+							send(client_socket, message, strlen(message), 0);
+
+							clock_t end = clock();
+							double total_time = (double)(end - start) / CLOCKS_PER_SEC;
+							double total_time_in_system = total_time - arrived_time;
+							sprintf(message, "Failed for client_socket %d : %d + %d", client_socket, num1, num2);
+							printf("%s\n", message);
+
+							time_t now = time(NULL);
+							struct tm *timeinfo = localtime(&now);
+							char buffer[80];
+							char buffer2[100];
+							char file_name[150];
+
+							strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
+							strftime(buffer2, sizeof(buffer), "%Y-%m-%d-", timeinfo);
+							sprintf(file_name, "%s_%s.txt", BASE_LOG_FILE_NAME, buffer2);
+
+							pthread_mutex_lock(&log_file_lock);
+							FILE *fp = open_file(file_name);
+							fprintf(fp, "Request with client socket %d assigned to thread with id %d is Not finished and deadline is passed!\n Current time of System: %s\n Arriving Time: %f\r Waiting Time in Queue: %f\n Task Definition: %d + %d\n---------------------------------------------\n", client_socket, i + 1, buffer, arrived_time, total_time_in_system, num1, num2);
+							fclose(fp);
+							pthread_mutex_unlock(&log_file_lock);
 							continue;
 						}
 						else
